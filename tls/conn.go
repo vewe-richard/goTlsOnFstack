@@ -120,6 +120,10 @@ type Conn struct {
 	activeCall atomic.Int32
 
 	tmp [16]byte
+
+	HandshakeState int
+	tls13_state *clientHandshakeStateTLS13
+	tls_state *clientHandshakeState
 }
 
 // Access to net.Conn methods.
@@ -1493,6 +1497,14 @@ func (c *Conn) HandshakeContext(ctx context.Context) error {
 	return c.handshakeContext(ctx)
 }
 
+func (c *Conn) HandshakeContext2(ctx context.Context) error {
+	return c.clientHandshake2(ctx)
+}
+
+func (c *Conn) HandshakeContext3(ctx context.Context) error {
+	return c.clientHandshake3(ctx)
+}
+
 func (c *Conn) handshakeContext(ctx context.Context) (ret error) {
 	// Fast sync/atomic-based exit if there is no handshake in flight and the
 	// last one succeeded without an error. Avoids the expensive context setup
@@ -1550,7 +1562,12 @@ func (c *Conn) handshakeContext(ctx context.Context) (ret error) {
 	c.in.Lock()
 	defer c.in.Unlock()
 
+	fmt.Println("call handshakefn")
 	c.handshakeErr = c.handshakeFn(handshakeCtx)
+	if c.HandshakeState == 1 {
+		return c.handshakeErr
+	}
+	fmt.Println("end call handshakeFn")
 	if c.handshakeErr == nil {
 		c.handshakes++
 	} else {

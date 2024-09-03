@@ -218,9 +218,29 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 		earlyTrafficSecret := suite.deriveSecret(earlySecret, clientEarlyTrafficLabel, transcript)
 		c.quicSetWriteSecret(QUICEncryptionLevelEarly, suite.id, earlyTrafficSecret)
 	}
+	if c.HandshakeState == 1 {
+		c.tls13_state = &clientHandshakeStateTLS13{
+			c:           c,
+			ctx:         ctx,
+			hello:       hello,
+			ecdheKey:    ecdheKey,
+			session:     session,
+			earlySecret: earlySecret,
+			binderKey:   binderKey,
+		}
 
+		c.tls_state = &clientHandshakeState{
+			c:           c,
+			ctx:         ctx,
+			hello:       hello,
+			session:     session,
+		}
+		return nil
+	}
 	// serverHelloMsg is not included in the transcript
+	fmt.Println("call readHandshake")
 	msg, err := c.readHandshake(nil)
+	fmt.Println("end call readHandshake")
 	if err != nil {
 		return err
 	}
@@ -260,6 +280,7 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 		}
 
 		// In TLS 1.3, session tickets are delivered after the handshake.
+		fmt.Println("before hs.handshake")
 		return hs.handshake()
 	}
 
@@ -277,6 +298,64 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 
 	return nil
 }
+
+func (c *Conn) clientHandshake2(ctx context.Context) (err error) {
+	// serverHelloMsg is not included in the transcript
+	fmt.Println("call readHandshake")
+	msg, err := c.readHandshake(nil)
+	fmt.Println("end call readHandshake")
+	if err != nil {
+		return err
+	}
+
+	serverHello, ok := msg.(*serverHelloMsg)
+	if !ok {
+		c.sendAlert(alertUnexpectedMessage)
+		return unexpectedMessageError(serverHello, msg)
+	}
+
+	if err := c.pickTLSVersion(serverHello); err != nil {
+		return err
+	}
+
+	// If we are negotiating a protocol version that's lower than what we
+	// support, check for the server downgrade canaries.
+	// See RFC 8446, Section 4.1.3.
+	maxVers := c.config.maxSupportedVersion(roleClient)
+	tls12Downgrade := string(serverHello.random[24:]) == downgradeCanaryTLS12
+	tls11Downgrade := string(serverHello.random[24:]) == downgradeCanaryTLS11
+	if maxVers == VersionTLS13 && c.vers <= VersionTLS12 && (tls12Downgrade || tls11Downgrade) ||
+		maxVers == VersionTLS12 && c.vers <= VersionTLS11 && tls11Downgrade {
+		c.sendAlert(alertIllegalParameter)
+		return errors.New("tls: downgrade attempt detected, possibly due to a MitM attack or a broken middlebox")
+	}
+	fmt.Println("tls version", c.vers)
+	if c.vers == VersionTLS13 {
+		c.tls13_state.serverHello = serverHello
+
+		// In TLS 1.3, session tickets are delivered after the handshake.
+		fmt.Println("before hs.handshake")
+		return c.tls13_state.handshake()
+	}
+
+	c.tls_state.serverHello = serverHello
+
+	if err := c.tls_state.handshake(); err != nil {
+		return err
+	}
+
+
+	return err
+}
+
+func (c *Conn) clientHandshake3(ctx context.Context) (err error) {
+	if c.vers == VersionTLS13 {
+		return c.tls13_state.handshake2()
+	}
+	c.tls_state.handshake2()
+	return errors.New("handshake 3 not implemented")
+}
+
 
 func (c *Conn) loadSession(hello *clientHelloMsg) (
 	session *SessionState, earlySecret, binderKey []byte, err error) {
@@ -432,6 +511,10 @@ func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg) error {
 	c.out.version = vers
 
 	return nil
+}
+
+func (hs *clientHandshakeState) handshake2() error {
+	return errors.New("Not implemented")
 }
 
 // Does the handshake, either a full one or resumes old session. Requires hs.c,

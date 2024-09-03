@@ -12,6 +12,7 @@ import (
 	"crypto/hmac"
 	"crypto/rsa"
 	"errors"
+	"fmt"
 	"hash"
 	"time"
 )
@@ -56,7 +57,6 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	if hs.ecdheKey == nil || len(hs.hello.keyShares) != 1 {
 		return c.sendAlert(alertInternalError)
 	}
-
 	if err := hs.checkServerHelloOrHRR(); err != nil {
 		return err
 	}
@@ -66,7 +66,6 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	if err := transcriptMsg(hs.hello, hs.transcript); err != nil {
 		return err
 	}
-
 	if bytes.Equal(hs.serverHello.random, helloRetryRequestRandom) {
 		if err := hs.sendDummyChangeCipherSpec(); err != nil {
 			return err
@@ -79,7 +78,6 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	if err := transcriptMsg(hs.serverHello, hs.transcript); err != nil {
 		return err
 	}
-
 	c.buffering = true
 	if err := hs.processServerHello(); err != nil {
 		return err
@@ -90,12 +88,22 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	if err := hs.establishHandshakeKeys(); err != nil {
 		return err
 	}
+
+	if hs.c.HandshakeState != 0 {
+		fmt.Println("asynchro process")
+		return nil
+	}
+
+	fmt.Println("readServerParameters")
 	if err := hs.readServerParameters(); err != nil {
 		return err
 	}
+	fmt.Println("end readServerParameters")
+	fmt.Println("readServerCertificate")
 	if err := hs.readServerCertificate(); err != nil {
 		return err
 	}
+	fmt.Println("end readServerCertificate")
 	if err := hs.readServerFinished(); err != nil {
 		return err
 	}
@@ -111,6 +119,34 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 
 	c.isHandshakeComplete.Store(true)
 
+	return nil
+}
+
+func (hs *clientHandshakeStateTLS13) handshake2() error {
+	fmt.Println("readServerParameters")
+	if err := hs.readServerParameters(); err != nil {
+		return err
+	}
+	fmt.Println("end readServerParameters")
+	fmt.Println("readServerCertificate")
+	if err := hs.readServerCertificate(); err != nil {
+		return err
+	}
+	fmt.Println("end readServerCertificate")
+	if err := hs.readServerFinished(); err != nil {
+		return err
+	}
+	if err := hs.sendClientCertificate(); err != nil {
+		return err
+	}
+	if err := hs.sendClientFinished(); err != nil {
+		return err
+	}
+	if _, err := hs.c.flush(); err != nil {
+		return err
+	}
+
+	hs.c.isHandshakeComplete.Store(true)
 	return nil
 }
 
