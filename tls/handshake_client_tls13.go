@@ -124,18 +124,25 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 
 func (hs *clientHandshakeStateTLS13) handshake2() error {
 	fmt.Println("readServerParameters")
-	if err := hs.readServerParameters(); err != nil {
+
+	if hs.c.readServerParametersDone {
+	} else if err := hs.readServerParameters(); err != nil {
 		return err
 	}
+	hs.c.readServerParametersDone = true
 	fmt.Println("end readServerParameters")
 	fmt.Println("readServerCertificate")
-	if err := hs.readServerCertificate(); err != nil {
+	if hs.c.readServerCertificateDone {
+	} else if err := hs.readServerCertificate(); err != nil {
 		return err
 	}
+	hs.c.readServerCertificateDone = true
 	fmt.Println("end readServerCertificate")
-	if err := hs.readServerFinished(); err != nil {
+	if hs.c.readServerFinishedDone {
+	} else if err := hs.readServerFinished(); err != nil {
 		return err
 	}
+	hs.c.readServerFinishedDone = true
 	if err := hs.sendClientCertificate(); err != nil {
 		return err
 	}

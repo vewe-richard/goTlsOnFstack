@@ -124,6 +124,10 @@ type Conn struct {
 	HandshakeState int
 	tls13_state *clientHandshakeStateTLS13
 	tls_state *clientHandshakeState
+
+	readServerParametersDone bool
+	readServerCertificateDone bool
+	readServerFinishedDone bool
 }
 
 // Access to net.Conn methods.
@@ -612,6 +616,7 @@ func (c *Conn) readChangeCipherSpec() error {
 //   - an error is returned
 func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 	if c.in.err != nil {
+		fmt.Println("in error")
 		return c.in.err
 	}
 	handshakeComplete := c.isHandshakeComplete.Load()
@@ -635,6 +640,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 			err = io.EOF
 		}
 		if e, ok := err.(net.Error); !ok || !e.Temporary() {
+			fmt.Println("set in error")
 			c.in.setErrorLocked(err)
 		}
 		return err
@@ -680,6 +686,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 	}
 	if err := c.readFromUntil(c.conn, recordHeaderLen+n); err != nil {
 		if e, ok := err.(net.Error); !ok || !e.Temporary() {
+			fmt.Println("set in error 1")
 			c.in.setErrorLocked(err)
 		}
 		return err
@@ -830,6 +837,9 @@ func (c *Conn) readFromUntil(r io.Reader, n int) error {
 	// "predict" closeNotify alerts.
 	c.rawInput.Grow(needs + bytes.MinRead)
 	_, err := c.rawInput.ReadFrom(&atLeastReader{r, int64(needs)})
+	if err != nil {
+		fmt.Println("readFromUtil error", err.Error())
+	}
 	return err
 }
 
@@ -1075,11 +1085,16 @@ func (c *Conn) readHandshakeBytes(n int) error {
 	if c.quic != nil {
 		return c.quicReadHandshakeBytes(n)
 	}
+	fmt.Println("begin readHandshakeBytes")
 	for c.hand.Len() < n {
+		fmt.Println("len and n", c.hand.Len(), n)
 		if err := c.readRecord(); err != nil {
-			return err
+			fmt.Println("new error", err.Error())
+			return errors.New("Data Not Enough")
 		}
+		fmt.Println("end len and n", c.hand.Len(), n)
 	}
+	fmt.Println("end call readHandshakeBytes")
 	return nil
 }
 
