@@ -128,6 +128,16 @@ type Conn struct {
 	readServerParametersDone bool
 	readServerCertificateDone bool
 	readServerFinishedDone bool
+
+	fsDone bool
+	fs1Done bool
+	fs2Done bool
+	fs3Done bool
+	readTicketDone bool
+
+	certMsg *certificateMsg
+	msg any
+	chainToSend *Certificate
 }
 
 // Access to net.Conn methods.

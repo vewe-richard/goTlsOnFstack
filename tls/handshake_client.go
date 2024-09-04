@@ -352,8 +352,8 @@ func (c *Conn) clientHandshake3(ctx context.Context) (err error) {
 	if c.vers == VersionTLS13 {
 		return c.tls13_state.handshake2()
 	}
-	c.tls_state.handshake2()
-	return errors.New("handshake 3 not implemented")
+
+	return c.tls_state.handshake2()
 }
 
 
@@ -514,7 +514,71 @@ func (c *Conn) pickTLSVersion(serverHello *serverHelloMsg) error {
 }
 
 func (hs *clientHandshakeState) handshake2() error {
-	return errors.New("Not implemented")
+	c := hs.c
+
+	if c.didResume {
+		if err := hs.establishKeys(); err != nil {
+			return err
+		}
+		if err := hs.readSessionTicket(); err != nil {
+			return err
+		}
+		if err := hs.readFinished(c.serverFinished[:]); err != nil {
+			return err
+		}
+		c.clientFinishedIsFirst = false
+		// Make sure the connection is still being verified whether or not this
+		// is a resumption. Resumptions currently don't reverify certificates so
+		// they don't call verifyServerCertificate. See Issue 31641.
+		if c.config.VerifyConnection != nil {
+			if err := c.config.VerifyConnection(c.connectionStateLocked()); err != nil {
+				c.sendAlert(alertBadCertificate)
+				return err
+			}
+		}
+		if err := hs.sendFinished(c.clientFinished[:]); err != nil {
+			return err
+		}
+		if _, err := c.flush(); err != nil {
+			return err
+		}
+	} else {
+		if !hs.c.fsDone {
+			if err := hs.doFullHandshake(); err != nil {
+				fmt.Println("doFullHandshake failed")
+				return err
+			}
+
+			if err := hs.establishKeys(); err != nil {
+				return err
+			}
+			if err := hs.sendFinished(c.clientFinished[:]); err != nil {
+				return err
+			}
+			if _, err := c.flush(); err != nil {
+				return err
+			}
+			c.clientFinishedIsFirst = true
+			hs.c.fsDone = true
+		}
+		if !hs.c.readTicketDone {
+			if err := hs.readSessionTicket(); err != nil {
+				return err
+			}
+			hs.c.readTicketDone = true
+		}
+		if err := hs.readFinished(c.serverFinished[:]); err != nil {
+			return err
+		}
+	}
+	if err := hs.saveSessionTicket(); err != nil {
+		return err
+	}
+
+	c.ekm = ekmFromMasterSecret(c.vers, hs.suite, hs.masterSecret, hs.hello.random, hs.serverHello.random)
+	c.isHandshakeComplete.Store(true)
+
+	return nil
 }
 
 // Does the handshake, either a full one or resumes old session. Requires hs.c,
@@ -546,6 +610,11 @@ func (hs *clientHandshakeState) handshake() error {
 
 	c.buffering = true
 	c.didResume = isResume
+
+	if hs.c.HandshakeState != 0 {
+		fmt.Println("let's asynchro process")
+		return nil
+	}
 	if isResume {
 		if err := hs.establishKeys(); err != nil {
 			return err
@@ -620,136 +689,160 @@ func (hs *clientHandshakeState) pickCipherSuite() error {
 func (hs *clientHandshakeState) doFullHandshake() error {
 	c := hs.c
 
-	msg, err := c.readHandshake(&hs.finishedHash)
-	if err != nil {
-		return err
-	}
-	certMsg, ok := msg.(*certificateMsg)
-	if !ok || len(certMsg.certificates) == 0 {
-		c.sendAlert(alertUnexpectedMessage)
-		return unexpectedMessageError(certMsg, msg)
-	}
-
-	msg, err = c.readHandshake(&hs.finishedHash)
-	if err != nil {
-		return err
-	}
-
-	cs, ok := msg.(*certificateStatusMsg)
-	if ok {
-		// RFC4366 on Certificate Status Request:
-		// The server MAY return a "certificate_status" message.
-
-		if !hs.serverHello.ocspStapling {
-			// If a server returns a "CertificateStatus" message, then the
-			// server MUST have included an extension of type "status_request"
-			// with empty "extension_data" in the extended server hello.
-
+	if ! c.fs1Done {
+		msg, err := c.readHandshake(&hs.finishedHash)
+		if err != nil {
+			return err
+		}
+		certMsg, ok := msg.(*certificateMsg)
+		if !ok || len(certMsg.certificates) == 0 {
 			c.sendAlert(alertUnexpectedMessage)
-			return errors.New("tls: received unexpected CertificateStatus message")
+			return unexpectedMessageError(certMsg, msg)
 		}
+		c.fs1Done = true
+		fmt.Println("c.fs1Done")
+		c.certMsg = certMsg
+	}
 
-		c.ocspResponse = cs.response
+	certMsg := c.certMsg
 
-		msg, err = c.readHandshake(&hs.finishedHash)
+	if ! c.fs2Done {
+		msg, err := c.readHandshake(&hs.finishedHash)
 		if err != nil {
 			return err
 		}
+
+		cs, ok := msg.(*certificateStatusMsg)
+		if ok {
+			// RFC4366 on Certificate Status Request:
+			// The server MAY return a "certificate_status" message.
+
+			if !hs.serverHello.ocspStapling {
+				// If a server returns a "CertificateStatus" message, then the
+				// server MUST have included an extension of type "status_request"
+				// with empty "extension_data" in the extended server hello.
+
+				c.sendAlert(alertUnexpectedMessage)
+				return errors.New("tls: received unexpected CertificateStatus message")
+			}
+
+			c.ocspResponse = cs.response
+
+			msg, err = c.readHandshake(&hs.finishedHash)
+			if err != nil {
+				return err
+			}
+		}
+		c.fs2Done = true
+		fmt.Println("c.fs2Done")
+		c.msg = msg
 	}
 
-	if c.handshakes == 0 {
-		// If this is the first handshake on a connection, process and
-		// (optionally) verify the server's certificates.
-		if err := c.verifyServerCertificate(certMsg.certificates); err != nil {
-			return err
-		}
-	} else {
-		// This is a renegotiation handshake. We require that the
-		// server's identity (i.e. leaf certificate) is unchanged and
-		// thus any previous trust decision is still valid.
-		//
-		// See https://mitls.org/pages/attacks/3SHAKE for the
-		// motivation behind this requirement.
-		if !bytes.Equal(c.peerCertificates[0].Raw, certMsg.certificates[0]) {
-			c.sendAlert(alertBadCertificate)
-			return errors.New("tls: server's identity changed during renegotiation")
-		}
-	}
+	msg :=c.msg
+	var err  error
+	err = nil
 
-	keyAgreement := hs.suite.ka(c.vers)
+	if ! c.fs3Done {
+		if c.handshakes == 0 {
+			// If this is the first handshake on a connection, process and
+			// (optionally) verify the server's certificates.
+			if err := c.verifyServerCertificate(certMsg.certificates); err != nil {
+				return err
+			}
+		} else {
+			// This is a renegotiation handshake. We require that the
+			// server's identity (i.e. leaf certificate) is unchanged and
+			// thus any previous trust decision is still valid.
+			//
+			// See https://mitls.org/pages/attacks/3SHAKE for the
+			// motivation behind this requirement.
+			if !bytes.Equal(c.peerCertificates[0].Raw, certMsg.certificates[0]) {
+				c.sendAlert(alertBadCertificate)
+				return errors.New("tls: server's identity changed during renegotiation")
+			}
+		}
+		fmt.Println("111111")
+		keyAgreement := hs.suite.ka(c.vers)
 
-	skx, ok := msg.(*serverKeyExchangeMsg)
-	if ok {
-		err = keyAgreement.processServerKeyExchange(c.config, hs.hello, hs.serverHello, c.peerCertificates[0], skx)
-		if err != nil {
+		skx, ok := msg.(*serverKeyExchangeMsg)
+		if ok {
+			err = keyAgreement.processServerKeyExchange(c.config, hs.hello, hs.serverHello, c.peerCertificates[0], skx)
+			if err != nil {
+				c.sendAlert(alertUnexpectedMessage)
+				return err
+			}
+
+			msg, err = c.readHandshake(&hs.finishedHash)
+			if err != nil {
+				return err
+			}
+		}
+
+		var chainToSend *Certificate
+		var certRequested bool
+		certReq, ok := msg.(*certificateRequestMsg)
+		if ok {
+			certRequested = true
+
+			cri := certificateRequestInfoFromMsg(hs.ctx, c.vers, certReq)
+			if chainToSend, err = c.getClientCertificate(cri); err != nil {
+				c.sendAlert(alertInternalError)
+				return err
+			}
+
+			msg, err = c.readHandshake(&hs.finishedHash)
+			if err != nil {
+				return err
+			}
+		}
+		fmt.Println("2222222222")
+		shd, ok := msg.(*serverHelloDoneMsg)
+		if !ok {
 			c.sendAlert(alertUnexpectedMessage)
-			return err
+			return unexpectedMessageError(shd, msg)
 		}
 
-		msg, err = c.readHandshake(&hs.finishedHash)
+		// If the server requested a certificate then we have to send a
+		// Certificate message, even if it's empty because we don't have a
+		// certificate to send.
+		if certRequested {
+			certMsg = new(certificateMsg)
+			certMsg.certificates = chainToSend.Certificate
+			if _, err := hs.c.writeHandshakeRecord(certMsg, &hs.finishedHash); err != nil {
+				return err
+			}
+		}
+
+		preMasterSecret, ckx, err := keyAgreement.generateClientKeyExchange(c.config, hs.hello, c.peerCertificates[0])
 		if err != nil {
-			return err
-		}
-	}
-
-	var chainToSend *Certificate
-	var certRequested bool
-	certReq, ok := msg.(*certificateRequestMsg)
-	if ok {
-		certRequested = true
-
-		cri := certificateRequestInfoFromMsg(hs.ctx, c.vers, certReq)
-		if chainToSend, err = c.getClientCertificate(cri); err != nil {
 			c.sendAlert(alertInternalError)
 			return err
 		}
-
-		msg, err = c.readHandshake(&hs.finishedHash)
-		if err != nil {
-			return err
+		if ckx != nil {
+			if _, err := hs.c.writeHandshakeRecord(ckx, &hs.finishedHash); err != nil {
+				return err
+			}
 		}
-	}
 
-	shd, ok := msg.(*serverHelloDoneMsg)
-	if !ok {
-		c.sendAlert(alertUnexpectedMessage)
-		return unexpectedMessageError(shd, msg)
-	}
 
-	// If the server requested a certificate then we have to send a
-	// Certificate message, even if it's empty because we don't have a
-	// certificate to send.
-	if certRequested {
-		certMsg = new(certificateMsg)
-		certMsg.certificates = chainToSend.Certificate
-		if _, err := hs.c.writeHandshakeRecord(certMsg, &hs.finishedHash); err != nil {
-			return err
+		if hs.serverHello.extendedMasterSecret {
+			c.extMasterSecret = true
+			hs.masterSecret = extMasterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret,
+				hs.finishedHash.Sum())
+		} else {
+			hs.masterSecret = masterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret,
+				hs.hello.random, hs.serverHello.random)
 		}
-	}
-
-	preMasterSecret, ckx, err := keyAgreement.generateClientKeyExchange(c.config, hs.hello, c.peerCertificates[0])
-	if err != nil {
-		c.sendAlert(alertInternalError)
-		return err
-	}
-	if ckx != nil {
-		if _, err := hs.c.writeHandshakeRecord(ckx, &hs.finishedHash); err != nil {
-			return err
+		if err := c.config.writeKeyLog(keyLogLabelTLS12, hs.hello.random, hs.masterSecret); err != nil {
+			c.sendAlert(alertInternalError)
+			return errors.New("tls: failed to write to key log: " + err.Error())
 		}
+		fmt.Println("fs3done")
+		c.fs3Done = true
+		c.chainToSend = chainToSend
 	}
-
-	if hs.serverHello.extendedMasterSecret {
-		c.extMasterSecret = true
-		hs.masterSecret = extMasterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret,
-			hs.finishedHash.Sum())
-	} else {
-		hs.masterSecret = masterFromPreMasterSecret(c.vers, hs.suite, preMasterSecret,
-			hs.hello.random, hs.serverHello.random)
-	}
-	if err := c.config.writeKeyLog(keyLogLabelTLS12, hs.hello.random, hs.masterSecret); err != nil {
-		c.sendAlert(alertInternalError)
-		return errors.New("tls: failed to write to key log: " + err.Error())
-	}
+	chainToSend := c.chainToSend
+	certReq, _ := c.msg.(*certificateRequestMsg)
 
 	if chainToSend != nil && len(chainToSend.Certificate) > 0 {
 		certVerify := &certificateVerifyMsg{}
@@ -781,7 +874,7 @@ func (hs *clientHandshakeState) doFullHandshake() error {
 				return err
 			}
 		}
-
+		fmt.Println("444444444")
 		signed := hs.finishedHash.hashForClientCertificate(sigType, sigHash)
 		signOpts := crypto.SignerOpts(sigHash)
 		if sigType == signatureRSAPSS {
