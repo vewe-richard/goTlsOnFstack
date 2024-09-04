@@ -600,6 +600,42 @@ func (c *Conn) readChangeCipherSpec() error {
 	return c.readRecordOrCCS(true)
 }
 
+func (c *Conn) preReadRecordOrCCS() error {
+	handshakeComplete := c.isHandshakeComplete.Load()
+
+	if err := c.readFromUntil(c.conn, recordHeaderLen); err != nil {
+		return err
+	}
+	hdr := c.rawInput.Bytes()[:recordHeaderLen]
+	typ := recordType(hdr[0])
+
+	if !handshakeComplete && typ == 0x80 {
+		return nil
+	}
+
+	vers := uint16(hdr[1])<<8 | uint16(hdr[2])
+	expectedVers := c.vers
+	if expectedVers == VersionTLS13 {
+		expectedVers = VersionTLS12
+	}
+	n := int(hdr[3])<<8 | int(hdr[4])
+	if c.haveVers && vers != expectedVers {
+		return nil
+	}
+	if !c.haveVers {
+		if (typ != recordTypeAlert && typ != recordTypeHandshake) || vers >= 0x1000 {
+			return nil
+		}
+	}
+	if c.vers == VersionTLS13 && n > maxCiphertextTLS13 || n > maxCiphertext {
+		return nil
+	}
+	if err := c.readFromUntil(c.conn, recordHeaderLen+n); err != nil {
+		return err
+	}
+	return nil
+}
+
 // readRecordOrCCS reads one or more TLS records from the connection and
 // updates the record layer state. Some invariants:
 //   - c.in must be locked
@@ -629,6 +665,11 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 
 	if c.quic != nil {
 		return c.in.setErrorLocked(errors.New("tls: internal error: attempted to read record with QUIC transport"))
+	}
+
+	if c.preReadRecordOrCCS() != nil {
+		fmt.Println("preReadRecordOrCCS failed")
+		return errors.New("Data Not Enough")
 	}
 
 	// Read header, payload.
