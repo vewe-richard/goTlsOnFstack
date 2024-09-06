@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	//"runtime/debug"
 )
 
 // A Conn represents a secured connection.
@@ -679,6 +680,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 
 	if c.preReadRecordOrCCS() != nil {
 		fmt.Println("preReadRecordOrCCS failed")
+		//debug.PrintStack()
 		return errors.New("Data Not Enough")
 	}
 
