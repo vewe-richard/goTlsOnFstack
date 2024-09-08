@@ -678,7 +678,10 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 		return c.in.setErrorLocked(errors.New("tls: internal error: attempted to read record with QUIC transport"))
 	}
 
-	if c.preReadRecordOrCCS() != nil {
+	if err := c.preReadRecordOrCCS(); err != nil {
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			return err
+		}
 		fmt.Println("preReadRecordOrCCS failed")
 		//debug.PrintStack()
 		return errors.New("Data Not Enough")
