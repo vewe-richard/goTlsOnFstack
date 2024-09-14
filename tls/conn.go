@@ -139,6 +139,9 @@ type Conn struct {
 	certMsg *certificateMsg
 	msg any
 	chainToSend *Certificate
+
+	DataProcessor  func(*Conn) (error)
+	OnConnected  func(*Conn) (error)
 }
 
 // Access to net.Conn methods.
