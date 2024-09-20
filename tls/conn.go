@@ -687,7 +687,7 @@ func (c *Conn) readRecordOrCCS(expectChangeCipherSpec bool) error {
 		}
 		fmt.Println("preReadRecordOrCCS failed")
 		//debug.PrintStack()
-		return errors.New("Data Not Enough")
+		return net.NewDataNotEnoughError()
 	}
 
 	// Read header, payload.
@@ -1144,16 +1144,12 @@ func (c *Conn) readHandshakeBytes(n int) error {
 	if c.quic != nil {
 		return c.quicReadHandshakeBytes(n)
 	}
-	fmt.Println("begin readHandshakeBytes")
 	for c.hand.Len() < n {
-		fmt.Println("len and n", c.hand.Len(), n)
 		if err := c.readRecord(); err != nil {
 			fmt.Println("new error", err.Error())
-			return errors.New("Data Not Enough")
+			return net.NewDataNotEnoughError()
 		}
-		fmt.Println("end len and n", c.hand.Len(), n)
 	}
-	fmt.Println("end call readHandshakeBytes")
 	return nil
 }
 
