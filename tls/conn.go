@@ -1751,3 +1751,10 @@ func (c *Conn) VerifyHostname(host string) error {
 	}
 	return c.peerCertificates[0].VerifyHostname(host)
 }
+
+
+func (c *Conn) FstackCallbacks(onConnected func(*Conn) error, dataProcessor func(*Conn) error) {
+	c.OnConnected = onConnected
+	c.DataProcessor = dataProcessor
+	net.FFAddConn(net.FFCurSock(), net.FFTlsConn, c)
+}
