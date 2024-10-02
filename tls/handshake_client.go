@@ -238,9 +238,7 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 		return nil
 	}
 	// serverHelloMsg is not included in the transcript
-	fmt.Println("call readHandshake")
 	msg, err := c.readHandshake(nil)
-	fmt.Println("end call readHandshake")
 	if err != nil {
 		return err
 	}
@@ -280,7 +278,6 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 		}
 
 		// In TLS 1.3, session tickets are delivered after the handshake.
-		fmt.Println("before hs.handshake")
 		return hs.handshake()
 	}
 
@@ -301,9 +298,7 @@ func (c *Conn) clientHandshake(ctx context.Context) (err error) {
 
 func (c *Conn) clientHandshake2(ctx context.Context) (err error) {
 	// serverHelloMsg is not included in the transcript
-	fmt.Println("call readHandshake")
 	msg, err := c.readHandshake(nil)
-	fmt.Println("end call readHandshake")
 	if err != nil {
 		return err
 	}
@@ -329,12 +324,10 @@ func (c *Conn) clientHandshake2(ctx context.Context) (err error) {
 		c.sendAlert(alertIllegalParameter)
 		return errors.New("tls: downgrade attempt detected, possibly due to a MitM attack or a broken middlebox")
 	}
-	fmt.Println("tls version", c.vers)
 	if c.vers == VersionTLS13 {
 		c.tls13_state.serverHello = serverHello
 
 		// In TLS 1.3, session tickets are delivered after the handshake.
-		fmt.Println("before hs.handshake")
 		return c.tls13_state.handshake()
 	}
 

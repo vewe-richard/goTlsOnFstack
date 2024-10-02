@@ -1632,12 +1632,10 @@ func (c *Conn) handshakeContext(ctx context.Context) (ret error) {
 	c.in.Lock()
 	defer c.in.Unlock()
 
-	fmt.Println("call handshakefn")
 	c.handshakeErr = c.handshakeFn(handshakeCtx)
 	if c.HandshakeState == 1 {
 		return c.handshakeErr
 	}
-	fmt.Println("end call handshakeFn")
 	if c.handshakeErr == nil {
 		c.handshakes++
 	} else {

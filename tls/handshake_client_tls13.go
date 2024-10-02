@@ -94,16 +94,12 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 		return nil
 	}
 
-	fmt.Println("readServerParameters")
 	if err := hs.readServerParameters(); err != nil {
 		return err
 	}
-	fmt.Println("end readServerParameters")
-	fmt.Println("readServerCertificate")
 	if err := hs.readServerCertificate(); err != nil {
 		return err
 	}
-	fmt.Println("end readServerCertificate")
 	if err := hs.readServerFinished(); err != nil {
 		return err
 	}
