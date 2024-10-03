@@ -12,7 +12,6 @@ import (
 	"crypto/hmac"
 	"crypto/rsa"
 	"errors"
-	"fmt"
 	"hash"
 	"time"
 )
@@ -90,7 +89,6 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 	}
 
 	if hs.c.HandshakeState != 0 {
-		fmt.Println("asynchro process")
 		return nil
 	}
 
@@ -119,21 +117,16 @@ func (hs *clientHandshakeStateTLS13) handshake() error {
 }
 
 func (hs *clientHandshakeStateTLS13) handshake2() error {
-	fmt.Println("readServerParameters")
-
 	if hs.c.readServerParametersDone {
 	} else if err := hs.readServerParameters(); err != nil {
 		return err
 	}
 	hs.c.readServerParametersDone = true
-	fmt.Println("end readServerParameters")
-	fmt.Println("readServerCertificate")
 	if hs.c.readServerCertificateDone {
 	} else if err := hs.readServerCertificate(); err != nil {
 		return err
 	}
 	hs.c.readServerCertificateDone = true
-	fmt.Println("end readServerCertificate")
 	if hs.c.readServerFinishedDone {
 	} else if err := hs.readServerFinished(); err != nil {
 		return err
